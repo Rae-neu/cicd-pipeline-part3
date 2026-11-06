@@ -1,12 +1,20 @@
 
 services:
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.14.0
     ports:
       - "4566:4566"
     environment:
       SERVICES: s3,dynamodb
       AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./localstack/init/ready.d:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal dynamodb describe-table --table-name tasks >/dev/null 2>&1 && awslocal s3api head-bucket --bucket task-objects >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
 
   api:
     build:
@@ -22,4 +30,5 @@ services:
       DYNAMODB_TABLE: tasks
       S3_BUCKET: task-objects
     depends_on:
-      - localstack
+      localstack:
+        condition: service_healthy
