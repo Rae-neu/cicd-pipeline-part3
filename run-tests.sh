@@ -1,11 +1,13 @@
-
 #!/bin/sh
 set -eu
 
 cd "$(dirname "$0")"
 
-echo "Building test Docker image..."
-docker build -f Dockerfile.test -t cicd-part2-test .
+echo "Starting Docker Compose test stack..."
 
-echo "Running automated tests..."
-docker run --rm cicd-part2-test
+trap 'docker compose -p cicd-part3-tests -f compose.test.yml down -v' EXIT
+
+docker compose -p cicd-part3-tests -f compose.test.yml up \
+  --build \
+  --abort-on-container-exit \
+  --exit-code-from tests
