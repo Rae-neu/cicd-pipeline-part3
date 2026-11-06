@@ -1,11 +1,10 @@
-
 #!/bin/sh
 set -eu
 
 cd "$(dirname "$0")"
 
-echo "Building REST API Docker image..."
-docker build -f Dockerfile.api -t cicd-part2-api .
+echo "Starting Go REST API and LocalStack..."
 
-echo "Starting REST API on port 8081..."
-docker run --rm -p 8081:8080 cicd-part2-api
+echo "API will be available at http://localhost:8081/tasks"
+
+docker compose -p cicd-part3-app -f compose.app.yml up --build
