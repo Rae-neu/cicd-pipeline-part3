@@ -1,0 +1,90 @@
+
+name: CI/CD Pipeline Part 2
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Dockerized tests
+        run: sh run-tests.sh
+
+      - name: Build REST API Docker image
+        run: docker build -f Dockerfile.api -t cicd-part2-api .
+
+      - name: Test REST API container
+        run: |
+          docker run -d --rm --name part2-api \
+            -p 8081:8080 cicd-part2-api
+
+          trap 'docker rm -f part2-api || true' EXIT
+
+          for i in {1..20}; do
+            if curl -fsS http://localhost:8081/tasks -o response.json; then
+              grep -q '^\[\]$' response.json
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Create workflow summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## CI/CD Pipeline Part 2"
+            echo "- Repository: $GITHUB_REPOSITORY"
+            echo "- Event: $GITHUB_EVENT_NAME"
+            echo "- Branch: $GITHUB_REF_NAME"
+            echo "- Status: $RESULT"
+            echo "- Checks: Docker tests and REST API"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Send Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RESULT: ${{ job.status }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "Slack webhook is not configured."
+            exit 0
+          fi
+
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          PAYLOAD=$(jq -n \
+            --arg status "$RESULT" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg branch "$GITHUB_REF_NAME" \
+            --arg url "$RUN_URL" \
+            '{
+              text: (
+                "CI/CD Part 2: " + $status +
+                "\nRepository: " + $repo +
+                "\nTrigger: " + $event +
+                "\nBranch: " + $branch +
+                "\nChecks: Docker tests and REST API" +
+                "\nWorkflow summary: " + $url
+              )
+            }')
+
+          curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD" \
+            "$SLACK_WEBHOOK_URL"
