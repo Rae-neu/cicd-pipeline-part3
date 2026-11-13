@@ -1,146 +1,72 @@
+# CI/CD Pipeline Part 3 — Orchestration and CRUD
 
-# CI/CD Pipeline (Part 2) - Dockerized REST API
-
-This project implements a Dockerized REST API using Go, with automated testing, GitHub Actions CI/CD, and Slack notifications.
-
-It builds on Part 1 by adding REST endpoints, Docker containers, and automated workflow notifications.
-
-## Features
-
-- REST API supporting GET, POST, PUT, and DELETE
-- Automated Go tests using httptest
-- HTTP status code validation
-- Separate Docker images for the API and tests
-- Shell scripts for building and running containers
-- GitHub Actions for automatic and manual CI runs
-- Workflow summaries and Slack notifications
-
-## Project Structure
-
-- `api/main.go` - REST API implementation
-- `api/main_test.go` - REST API tests
-- `calculator.go` - Calculator from Part 1
-- `calculator_test.go` - Original unit tests
-- `Dockerfile.api` - Dockerfile for the API
-- `Dockerfile.test` - Dockerfile for testing
-- `run-api.sh` - Script to build and run the API
-- `run-tests.sh` - Script to run Dockerized tests
-- `.github/workflows/ci.yml` - CI/CD workflow
-- `go.mod` - Go module configuration
+This Go REST API uses **Docker Compose** to run an API and **LocalStack** (AWS DynamoDB and S3). Each task is stored as a DynamoDB item and as JSON at `s3://task-objects/tasks/<id>.json`.
 
 ## Requirements
 
-- Go 1.27 or compatible version
-- Docker Desktop with Docker Engine running
-- Git
+Docker with Docker Compose v2+, Python 3. This project can be run entirely inside GitHub Codespaces. **No real AWS account is required.**
 
-## REST API Endpoints
-
-| Method | Endpoint | Description | Success Status |
-|--------|----------|-------------|----------------|
-| GET | /tasks | Get all tasks | 200 OK |
-| GET | /tasks/{id} | Get a task by ID | 200 OK |
-| POST | /tasks | Create a task | 201 Created |
-| PUT | /tasks/{id} | Update a task | 200 OK |
-| DELETE | /tasks/{id} | Delete a task | 204 No Content |
-
-Invalid requests may return 400 Bad Request, 404 Not Found, or 405 Method Not Allowed.
-
-Tasks are stored in memory and are reset when the API server restarts.
-
-## Run Locally
-
-Start the REST API:
-
-```bash
-go run ./api
-```
-
-The API runs at http://localhost:8080.
-
-Run all tests with verbose output:
-
-```bash
-go test -v ./...
-```
-
-## Run with Docker
-
-### REST API
-
-Build the API image:
-
-```bash
-docker build -f Dockerfile.api -t cicd-part2-api .
-```
-
-Run the container:
-
-```bash
-docker run --rm -p 8081:8080 cicd-part2-api
-```
-
-Access the API at http://localhost:8081/tasks.
-
-Alternatively, use the shell script in a Bash-compatible terminal:
+## Start the application
 
 ```bash
 sh run-api.sh
+# Alternative detached mode:
+docker compose -f compose.app.yml up -d --build
 ```
 
-The API container runs until manually stopped.
+The API is available at `http://localhost:8081/tasks`. LocalStack exposes port 4566. During startup, the init scripts in `localstack/init/ready.d` create the `tasks` DynamoDB table and `task-objects` S3 bucket. The API is launched only after LocalStack's health check passes.
 
-### Automated Tests
+## CRUD endpoints
 
-Build the test image:
+| Method | Path | Success | Behavior |
+|---|---|---|---|
+| GET | `/tasks` | 200 | List tasks from DynamoDB |
+| GET | `/tasks/{id}` | 200 | Read item from DynamoDB |
+| POST | `/tasks` | 201 | Store in DynamoDB and S3 |
+| PUT | `/tasks/{id}` | 200 | Update DynamoDB and S3 |
+| DELETE | `/tasks/{id}` | 204 | Delete from DynamoDB and S3 |
+
+Invalid requests return 400, missing items return 404, and unsupported methods return 405. Storage errors return 500.
+
+Example POST:
 
 ```bash
-docker build -f Dockerfile.test -t cicd-part2-test .
+curl -i -X POST http://localhost:8081/tasks -H 'Content-Type: application/json' -d '{"title":"Finish Part 3"}'
 ```
 
-Run the tests:
+## Run all tests
 
 ```bash
-docker run --rm cicd-part2-test
-```
-
-Alternatively, use the shell script:
-
-```bash
+# Dockerized Go unit tests (exit code reflects test success/failure)
 sh run-tests.sh
+
+# Full end-to-end API and AWS resource test (automatically starts/stops the stack)
+python3 scripts/integration_test.py
 ```
 
-The test container exits with code 0 when all tests pass and a non-zero exit code when tests fail.
+The integration test verifies successful and invalid GET, POST, PUT and DELETE requests; it reads the corresponding DynamoDB records and S3 objects to confirm synchronization, then verifies both are deleted. It exits with a nonzero status on failure.
 
-## CI/CD Pipeline
+To stop the application:
 
-GitHub Actions runs the workflow on:
+```bash
+docker compose -f compose.app.yml down
+```
 
-- Push
-- Pull request
-- Manual execution using workflow_dispatch
+## CI/CD with GitHub Actions
 
-The workflow:
+`.github/workflows/ci.yml` runs on pushes, pull requests and manual dispatch. It starts the LocalStack test stack, runs the Go tests, stops it, then runs the end-to-end suite. GitHub Actions **fails if a test fails**, creates a workflow summary and sends Slack a result plus a brief excerpt of test output.
 
-1. Checks out the repository.
-2. Builds and runs Dockerized Go tests.
-3. Builds the REST API Docker image.
-4. Starts the API container and verifies its response.
-5. Generates a GitHub Actions workflow summary.
-6. Sends the workflow status and summary link to Slack.
+Configure Slack using the repository Actions secret `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook). If the secret is absent, the notification step is skipped; setting it is required for Slack messages to actually arrive.
 
-## Slack Notifications
+## Key files
 
-The workflow uses an Incoming Webhook to send notifications to the Slack channel #ci-notifications.
+- `api/main.go` — application entry point and standalone in-memory mode
+- `api/part3_cloud.go` — cloud-backed REST handlers used by Docker Compose
+- `api/aws.go`, `api/dynamodb.go`, `api/s3.go` — LocalStack clients and persistence
+- `localstack/init/ready.d/` — local AWS resource initialization
+- `compose.app.yml` / `run-api.sh` — application stack and launcher
+- `compose.test.yml` / `run-tests.sh` — unit test stack and launcher
+- `scripts/integration_test.py` — end-to-end checks
+- `.github/workflows/ci.yml` — automated pipeline and Slack notification
 
-The webhook URL is stored securely as a GitHub Actions repository secret:
-
-`SLACK_WEBHOOK_URL`
-
-Notifications include the workflow status, repository, trigger, branch, and workflow summary link.
-
-The webhook URL is not included in the source code.
-
-## GitHub Repository
-
-https://github.com/Rae-neu/cicd-pipeline-part2
+Repository: https://github.com/Rae-neu/cicd-pipeline-part3

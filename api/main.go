@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,11 +22,19 @@ var (
 )
 
 func main() {
-	http.HandleFunc("/tasks", tasksHandler)
-	http.HandleFunc("/tasks/", taskByIDHandler)
-
+	mux := http.NewServeMux()
+	if os.Getenv("AWS_ENDPOINT_URL") != "" {
+		if err := registerPart3CloudHandlers(mux); err != nil {
+			log.Fatalf("cannot initialize cloud storage: %v", err)
+		}
+		log.Println("Using LocalStack DynamoDB + S3")
+	} else {
+		mux.HandleFunc("/tasks", tasksHandler)
+		mux.HandleFunc("/tasks/", taskByIDHandler)
+		log.Println("Using in-memory storage")
+	}
 	log.Println("Server running on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
 // GET all tasks and POST a new task

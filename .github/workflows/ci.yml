@@ -1,5 +1,4 @@
-
-name: CI/CD Pipeline Part 2
+name: CI/CD Pipeline Part 3
 
 on:
   push:
@@ -12,79 +11,52 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Dockerized tests
-        run: sh run-tests.sh
-
-      - name: Build REST API Docker image
-        run: docker build -f Dockerfile.api -t cicd-part2-api .
-
-      - name: Test REST API container
+      - name: Dockerized Go tests
         run: |
-          docker run -d --rm --name part2-api \
-            -p 8081:8080 cicd-part2-api
+          set -o pipefail
+          docker compose -f compose.test.yml up --build --abort-on-container-exit --exit-code-from tests 2>&1 | tee unit-tests.log
 
-          trap 'docker rm -f part2-api || true' EXIT
+      - name: Stop unit test stack
+        if: always()
+        run: docker compose -f compose.test.yml down --remove-orphans
 
-          for i in {1..20}; do
-            if curl -fsS http://localhost:8081/tasks -o response.json; then
-              grep -q '^\[\]$' response.json
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+      - name: Integration tests (CRUD, DynamoDB, S3)
+        run: |
+          set -o pipefail
+          python3 scripts/integration_test.py 2>&1 | tee integration-tests.log
 
-      - name: Create workflow summary
+      - name: Workflow summary
         if: always()
         env:
           RESULT: ${{ job.status }}
         run: |
           {
-            echo "## CI/CD Pipeline Part 2"
-            echo "- Repository: $GITHUB_REPOSITORY"
-            echo "- Event: $GITHUB_EVENT_NAME"
-            echo "- Branch: $GITHUB_REF_NAME"
+            echo '## CI/CD Pipeline Part 3'
             echo "- Status: $RESULT"
-            echo "- Checks: Docker tests and REST API"
+            echo '- Checks: Docker Compose, Go unit tests, REST CRUD, DynamoDB and S3'
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo '### Test output'
+            echo '```'
+            (grep -E 'PASS|FAIL|^ok |^Error:|^FAIL' unit-tests.log integration-tests.log 2>/dev/null || true) | tail -n 35
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Send Slack notification
+      - name: Slack notification
         if: always()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RESULT: ${{ job.status }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "Slack webhook is not configured."
+            echo 'Slack webhook not configured. Set the SLACK_WEBHOOK_URL repository secret.'
             exit 0
           fi
-
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
-          PAYLOAD=$(jq -n \
-            --arg status "$RESULT" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg event "$GITHUB_EVENT_NAME" \
-            --arg branch "$GITHUB_REF_NAME" \
-            --arg url "$RUN_URL" \
-            '{
-              text: (
-                "CI/CD Part 2: " + $status +
-                "\nRepository: " + $repo +
-                "\nTrigger: " + $event +
-                "\nBranch: " + $branch +
-                "\nChecks: Docker tests and REST API" +
-                "\nWorkflow summary: " + $url
-              )
-            }')
-
-          curl -fsS -X POST \
-            -H "Content-Type: application/json" \
-            --data "$PAYLOAD" \
-            "$SLACK_WEBHOOK_URL"
+          OUTPUT=$( (grep -E 'PASS|FAIL|^ok |^Error:' unit-tests.log integration-tests.log 2>/dev/null || true) | tail -n 25 | cut -c 1-180 )
+          PAYLOAD=$(jq -n --arg status "$RESULT" --arg url "$RUN_URL" --arg output "$OUTPUT" \
+            '{text: ("CI/CD Part 3: " + $status + "\nRun: " + $url + "\nTest results:\n" + $output)}')
+          curl -fsS -X POST -H 'Content-Type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
